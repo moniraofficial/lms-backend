@@ -2,58 +2,53 @@ const { MongoClient } = require('mongodb');
 const dns = require('node:dns');
 require('dotenv').config();
 
-
-try {
-  dns.setServers(['8.8.8.8', '8.8.4.4']);
-} catch {
-
+// Fix for Node.js on Windows resolving MongoDB Atlas SRV records locally
+// Do not override DNS on Linux/Vercel (AWS Lambda)
+if (process.platform === 'win32') {
+  try {
+    dns.setServers(['8.8.8.8', '8.8.4.4']);
+  } catch {
+    // Ignore if custom DNS cannot be set
+  }
 }
 
-const uri = process.env.MONGODB_URI;
-
-let client;
-let db;
+let cachedClient = null;
+let cachedDb = null;
 
 async function connectDB() {
+  if (cachedDb) {
+    return cachedDb;
+  }
+
+  const uri = process.env.MONGODB_URI;
   if (!uri) {
-    console.error('❌ MONGODB_URI is not defined in your .env file!');
-    console.error('   Please check that your .env file has: MONGODB_URI=mongodb+srv://<username>:<password>@...');
-    process.exit(1);
+    const errorMsg = '❌ MONGODB_URI is not defined in environment variables! Please add it in your .env file or Vercel Environment Variables.';
+    console.error(errorMsg);
+    throw new Error(errorMsg);
   }
 
   try {
-    if (!client) {
-      client = new MongoClient(uri, {
+    if (!cachedClient) {
+      cachedClient = new MongoClient(uri, {
         serverSelectionTimeoutMS: 5000,
       });
     }
 
-    await client.connect();
-    db = client.db(process.env.DB_NAME || 'datapollex-lms');
+    await cachedClient.connect();
+    cachedDb = cachedClient.db(process.env.DB_NAME || 'datapollex-lms');
     console.log('✅ Connected successfully to MongoDB Native Driver');
+    return cachedDb;
   } catch (error) {
-    console.error('❌ MongoDB connection failed:');
-    console.error(error.message);
-    console.error('\n💡 Troubleshooting:');
-    if (uri && uri.includes('localhost')) {
-      console.error('   • Local MongoDB is not running on port 27017.');
-      console.error('   • If using MongoDB Atlas, replace MONGODB_URI in .env with your cloud cluster URI.');
-      console.error('   • If using local MongoDB, ensure MongoDB service is installed and started.');
-    } else {
-      console.error('   • Check your internet connection.');
-      console.error('   • Make sure your IP address is whitelisted in MongoDB Atlas (Network Access -> Add IP -> 0.0.0.0/0).');
-      console.error('   • Verify your database username & password in .env.');
-    }
-    process.exit(1);
+    console.error('❌ MongoDB connection failed:', error.message);
+    throw error;
   }
 }
 
 function getDB() {
-  if (!db) {
+  if (!cachedDb) {
     throw new Error('Database not initialized! Call connectDB first.');
   }
-  return db;
+  return cachedDb;
 }
 
 module.exports = { connectDB, getDB };
-
